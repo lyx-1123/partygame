@@ -1,5 +1,10 @@
 import { useState, useRef, useCallback } from 'react'
 
+function parseRetryMs(message) {
+  const m = message.match(/retry in ([\d.]+)s/i)
+  return m ? Math.ceil(parseFloat(m[1]) * 1000) + 500 : 12000
+}
+
 async function fetchWords(category, exclude = []) {
   const key = import.meta.env.VITE_GEMINI_API_KEY
   if (!key) throw new Error('未設定 API 金鑰')
@@ -9,7 +14,7 @@ async function fetchWords(category, exclude = []) {
     : ''
 
   const prompt =
-    `你是一個遊戲題庫專家。請針對類別 [${category}] 產生 20 個適合派對遊戲的繁體中文名詞。` +
+    `你是一個遊戲題庫專家。請針對類別 [${category}] 產生 50 個適合派對遊戲的繁體中文名詞。` +
     `難度需適中，避免過於冷門。${avoidLine}` +
     `請嚴格以 JSON 格式回傳，格式範例：{"words": ["詞彙1", "詞彙2", ...]}。不要包含任何解釋文字或 Markdown 語法。`
 
@@ -55,7 +60,6 @@ export function useGemini() {
     return fresh.length
   }
 
-  // Returns true on success, false on failure (caller decides whether to enter game)
   const loadWords = useCallback(async (category, usedWords) => {
     setLoading(true)
     setLoadError(null)
@@ -63,16 +67,30 @@ export function useGemini() {
     setWordList([])
     seenRef.current = new Set(usedWords)
 
-    try {
-      addFresh(await fetchWords(category, [...usedWords].slice(-100)))
-      return true
-    } catch (err) {
-      console.error('[Gemini] loadWords failed:', err.message)
-      setLoadError(err.message)
-      return false
-    } finally {
-      setLoading(false)
+    const exclude = [...usedWords].slice(-100)
+    let lastErr = null
+
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        addFresh(await fetchWords(category, exclude))
+        setLoading(false)
+        return true
+      } catch (err) {
+        lastErr = err
+        if (err.message.includes('429') && attempt < 5) {
+          const waitMs = parseRetryMs(err.message)
+          console.log(`[Gemini] 429 rate limit, waiting ${waitMs}ms (attempt ${attempt}/5)`)
+          await new Promise(r => setTimeout(r, waitMs))
+        } else {
+          break
+        }
+      }
     }
+
+    console.error('[Gemini] loadWords failed:', lastErr.message)
+    setLoadError(lastErr.message)
+    setLoading(false)
+    return false
   }, [])
 
   const checkAndRefill = useCallback((currentIndex, category) => {
