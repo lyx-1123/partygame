@@ -75,7 +75,7 @@ export default function SetupScreen({
           {/* API error */}
           {loadError && (
             <div className="bg-red-500/20 border border-red-400/40 rounded-xl px-4 py-3 text-red-300 text-sm text-center">
-              {loadError.includes('429') ? '請求太頻繁，請稍候一分鐘再試' : `載入失敗：${loadError}`}
+              {loadError.includes('所有模型') ? '所有 AI 模型額度已用完，請稍後再試' : `載入失敗：${loadError}`}
             </div>
           )}
 

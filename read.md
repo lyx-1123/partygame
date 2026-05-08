@@ -69,6 +69,3 @@
 3. 提供處理手勢與鍵盤監聽的 `useGameControls` 自定義 Hook。
 4. 使用 Tailwind CSS 進行響應式排版，確保在大螢幕與手機上皆有良好的操作感。
 
-
-
-

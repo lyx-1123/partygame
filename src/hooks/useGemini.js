@@ -1,13 +1,22 @@
 import { useState, useRef, useCallback } from 'react'
 
-function parseRetryMs(message) {
-  const m = message.match(/retry in ([\d.]+)s/i)
-  return m ? Math.ceil(parseFloat(m[1]) * 1000) + 500 : 12000
-}
+// Models in priority order — switch to next on 429 or 404
+const MODELS = [
+  {
+    id: 'gemini-3.1-flash-lite',
+    // Thinking enabled: model reviews word quality internally before outputting
+    generationConfig: { thinkingConfig: { thinkingLevel: 'medium' } },
+  },
+  { id: 'gemini-3-flash-preview' },
+  { id: 'gemini-2.5-flash' },
+  { id: 'gemini-2.5-flash-lite' },
+]
 
-async function fetchWords(category, exclude = []) {
+async function fetchWords(category, exclude = [], modelIndex = 0) {
   const key = import.meta.env.VITE_GEMINI_API_KEY
   if (!key) throw new Error('未設定 API 金鑰')
+
+  const model = MODELS[Math.min(modelIndex, MODELS.length - 1)]
 
   const avoidLine = exclude.length > 0
     ? `以下詞彙已出現過，請完全避免重複，並產生全新的不同詞彙：${exclude.join('、')}。`
@@ -18,12 +27,17 @@ async function fetchWords(category, exclude = []) {
     `難度需適中，避免過於冷門。${avoidLine}` +
     `請嚴格以 JSON 格式回傳，格式範例：{"words": ["詞彙1", "詞彙2", ...]}。不要包含任何解釋文字或 Markdown 語法。`
 
+  const body = { contents: [{ parts: [{ text: prompt }] }] }
+  if (model.generationConfig) body.generationConfig = model.generationConfig
+
+  console.log(`[Gemini] Fetching with model: ${model.id}`)
+
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${key}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${model.id}:generateContent?key=${key}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      body: JSON.stringify(body),
     }
   )
 
@@ -33,12 +47,34 @@ async function fetchWords(category, exclude = []) {
   }
 
   const data = await res.json()
-  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? ''
+  // When thinking is active the parts array may contain thought entries — take only output parts
+  const parts = data.candidates?.[0]?.content?.parts ?? []
+  const outputPart = parts.find(p => !p.thought) ?? parts[0]
+  const raw = outputPart?.text?.trim() ?? ''
   const text = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
   const parsed = JSON.parse(text)
   if (!Array.isArray(parsed.words) || parsed.words.length === 0) throw new Error('回應格式錯誤')
-  console.log(`[Gemini] ✅ ${parsed.words.length} words for "${category}":`, parsed.words)
+  console.log(`[Gemini] ✅ ${parsed.words.length} words from ${model.id}:`, parsed.words)
   return parsed.words
+}
+
+// Always try from model 0; advance on 429 or 404; throw if all exhausted
+async function fetchWithCascade(category, exclude) {
+  for (let mi = 0; mi < MODELS.length; mi++) {
+    try {
+      return await fetchWords(category, exclude, mi)
+    } catch (err) {
+      const shouldAdvance = err.message.includes('429') || err.message.includes('404') || err.message.includes('503')
+      if (shouldAdvance && mi + 1 < MODELS.length) {
+        console.log(`[Gemini] ${MODELS[mi].id} unavailable, trying next model`)
+        continue
+      }
+      if (shouldAdvance && mi + 1 === MODELS.length) {
+        throw new Error('所有模型額度已用完，請稍後再試')
+      }
+      throw err
+    }
+  }
 }
 
 export function useGemini() {
@@ -67,30 +103,16 @@ export function useGemini() {
     setWordList([])
     seenRef.current = new Set(usedWords)
 
-    const exclude = [...usedWords].slice(-100)
-    let lastErr = null
-
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      try {
-        addFresh(await fetchWords(category, exclude))
-        setLoading(false)
-        return true
-      } catch (err) {
-        lastErr = err
-        if (err.message.includes('429') && attempt < 5) {
-          const waitMs = parseRetryMs(err.message)
-          console.log(`[Gemini] 429 rate limit, waiting ${waitMs}ms (attempt ${attempt}/5)`)
-          await new Promise(r => setTimeout(r, waitMs))
-        } else {
-          break
-        }
-      }
+    try {
+      addFresh(await fetchWithCascade(category, [...usedWords].slice(-100)))
+      setLoading(false)
+      return true
+    } catch (err) {
+      console.error('[Gemini] loadWords failed:', err.message)
+      setLoadError(err.message)
+      setLoading(false)
+      return false
     }
-
-    console.error('[Gemini] loadWords failed:', lastErr.message)
-    setLoadError(lastErr.message)
-    setLoading(false)
-    return false
   }, [])
 
   const checkAndRefill = useCallback((currentIndex, category) => {
@@ -100,7 +122,7 @@ export function useGemini() {
     fetchingRef.current = true
     console.log(`[Gemini] checkAndRefill (remaining=${remaining})`)
 
-    fetchWords(category, [...seenRef.current].slice(-100))
+    fetchWithCascade(category, [...seenRef.current].slice(-100))
       .then(words => addFresh(words))
       .catch(err => console.warn('[Gemini] refill failed:', err.message))
       .finally(() => { fetchingRef.current = false })
