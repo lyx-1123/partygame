@@ -4,7 +4,7 @@ import GameScreen from './components/GameScreen'
 import SummaryScreen from './components/SummaryScreen'
 import { useGemini } from './hooks/useGemini'
 
-const CATEGORIES = ['動物', '食物', '職業', '電影', '運動', '名人', '地名', '卡通']
+const CATEGORIES = ['隨機', '動物', '食物', '職業', '電影', '運動', '名人', '地名', '卡通']
 const LS_KEY = 'partygame_used_words'
 
 function loadUsedFromStorage() {

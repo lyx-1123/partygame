@@ -49,9 +49,8 @@ export default function SetupScreen({
             <input
               type="number"
               min={1}
-              max={50}
               value={targetGoal}
-              onChange={(e) => setTargetGoal(Math.max(1, Math.min(50, Number(e.target.value))))}
+              onChange={(e) => setTargetGoal(Math.max(1, Number(e.target.value)))}
               className="w-full bg-white/10 border border-white/20 text-white rounded-xl px-4 py-3
                          focus:outline-none focus:ring-2 focus:ring-purple-400 text-base"
             />
